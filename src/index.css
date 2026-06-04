@@ -118,10 +118,6 @@
     --sidebar-ring: oklch(0.556 0 0);
 }
 
-.platform-macos {
-    --window-titlebar-height: 30px;
-}
-
 @layer base {
   * {
     @apply border-border outline-ring/50;
@@ -139,29 +135,9 @@
     height: 100vh;
     background: var(--background);
     }
-  .platform-macos #root {
-    padding-top: var(--window-titlebar-height);
-    }
   html {
     @apply font-sans;
     }
-}
-
-.macos-titlebar-drag-region {
-  display: none;
-}
-
-.platform-macos .macos-titlebar-drag-region {
-  display: block;
-  position: fixed;
-  z-index: 2147483647;
-  top: 0;
-  right: 0;
-  left: 0;
-  height: var(--window-titlebar-height);
-  background: var(--background);
-  -webkit-app-region: drag;
-  user-select: none;
 }
 
 /* Legend scrollbar - left side */

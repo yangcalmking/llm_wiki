@@ -26,6 +26,18 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.4.20",
+    date: "2026-06-04",
+    highlights: {
+      en: [
+        "Fixed the macOS titlebar so it keeps native window dragging while following light and dark mode.",
+      ],
+      zh: [
+        "修复 macOS 顶部标题栏：保留系统原生拖动，同时跟随亮色和暗色模式。",
+      ],
+    },
+  },
+  {
     version: "0.4.19",
     date: "2026-06-03",
     highlights: {

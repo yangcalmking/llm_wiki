@@ -117,6 +117,10 @@ jobs:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        # Checkout is needed so gh can detect the current tag.
+        uses: actions/checkout@v4
+
       - name: Download all bundles
         uses: actions/download-artifact@v4
         with:
@@ -141,7 +145,8 @@ jobs:
             || true   # If draft already exists, continue to upload.
 
           # Upload each bundle asset.
-          for f in $(find bundles -type f | sort); do
+          # Use while/read instead of for-in to correctly handle filenames with spaces.
+          find bundles -type f | sort | while IFS= read -r f; do
             echo "Uploading: $f"
             gh release upload "$TAG" "$f" --clobber
           done

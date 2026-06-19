@@ -88,7 +88,10 @@ jobs:
       # switch to the sparse index protocol (faster + smaller
       # fetches) and force HTTP/1.1 to avoid HTTP/2 framing errors,
       # while also bumping the retry budget.
+      # shell: bash required for Windows runners (pwsh does not
+      # support `<<'EOF'` heredocs).
       - name: Harden Cargo networking for CI
+        shell: bash
         run: |
           mkdir -p ~/.cargo
           cat >> ~/.cargo/config.toml <<'EOF'

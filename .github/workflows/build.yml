@@ -118,8 +118,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        # Checkout is needed so gh can detect the current tag.
+        # fetch-depth: 0  ensures git log and previous tags are available
+        # for automatic changelog generation.
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Download all bundles
         uses: actions/download-artifact@v4
@@ -129,31 +132,70 @@ jobs:
       - name: List downloaded files
         run: find bundles -type f | sort
 
-      - name: Create Release & upload assets
+      - name: Generate changelog and create release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
           set -e
 
-          # Create the release (idempotent — fails gracefully if it already exists).
-          # Use --title to override the auto-generated tag name as title.
-          gh release create "$TAG" \
-            --title "LLM Wiki $TAG" \
-            --notes "See the assets below for download links." \
-            --draft \
-            || true   # If draft already exists, continue to upload.
+          # 1) Locate the previous release tag — pick the most recent semver-like
+          #    tag that sorts before $TAG so the changelog only contains commits
+          #    introduced in this release.
+          PREV_TAG=$(git tag --list 'v*' --sort=-v:refname \
+            | grep -v "^${TAG}$" \
+            | head -n 1)
 
-          # Upload each bundle asset.
-          # Use while/read instead of for-in to correctly handle filenames with spaces.
-          find bundles -type f | sort | while IFS= read -r f; do
-            echo "Uploading: $f"
-            gh release upload "$TAG" "$f" --clobber
-          done
+          if [ -n "$PREV_TAG" ]; then
+            CHANGELOG_HEADER="### Changes since ${PREV_TAG}"
+            CHANGELOG_BODY=$(git log --pretty=format:"- %h %s" "${PREV_TAG}..${TAG}" || echo "")
+          else
+            CHANGELOG_HEADER="### Initial release"
+            CHANGELOG_BODY=$(git log --pretty=format:"- %h %s" -n 30 "${TAG}" || echo "")
+          fi
+
+          if [ -z "$CHANGELOG_BODY" ]; then
+            CHANGELOG_BODY="- No additional commit information available"
+          fi
+
+          # 2) Assemble release notes and write to a temp file so gh can read
+          #    them via --notes-file. This avoids quoting issues with shell
+          #    expansion when passing multi-line strings through --notes.
+          NOTES_FILE=$(mktemp --suffix=.md)
+          cat > "$NOTES_FILE" <<EOF
+          ## LLM Wiki ${TAG}
+
+          ${CHANGELOG_HEADER}
+
+          ${CHANGELOG_BODY}
+
+          ---
+
+          ### Installation
+
+          Pick the installer matching your platform from the assets below.
+          EOF
+
+          echo "--- Release notes ---"
+          cat "$NOTES_FILE"
+          echo "---"
+
+          # 3) Create the release. gh release create accepts one or more files
+          #    as positional args; we enumerate the bundle files via a
+          #    space-safe find/read loop.
+          ASSETS=()
+          while IFS= read -r f; do
+            ASSETS+=("$f")
+          done < <(find bundles -type f | sort)
+
+          gh release create "$TAG" \
+            --title "LLM Wiki ${TAG}" \
+            --notes-file "$NOTES_FILE" \
+            "${ASSETS[@]}"
 
           echo ""
-          echo "✅ Release $TAG created at:"
-          echo "   https://github.com/yangcalmking/llm_wiki/releases/releases/$TAG"
+          echo "✅ Release ${TAG} created at:"
+          echo "   https://github.com/yangcalmking/llm_wiki/releases/tag/${TAG}"
 
   # ─── Phase 3: Package browser extension ────────────────────────────────
   package-extension:

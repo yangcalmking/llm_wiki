@@ -162,6 +162,24 @@ jobs:
       - name: List downloaded files
         run: find bundles -type f | sort
 
+      # Package the browser extension zip here in the release job so it
+      # can be attached as an asset at release creation time. A separate
+      # downstream job cannot `gh release upload` because gh release create
+      # marks the release as immutable after creation.
+      - name: Package browser extension zip
+        run: |
+          APP_VERSION=$(node -p "require('./package.json').version")
+          node -e "
+            const fs = require('fs');
+            const p = 'extension/manifest.json';
+            const m = JSON.parse(fs.readFileSync(p, 'utf-8'));
+            m.version = '${APP_VERSION}';
+            fs.writeFileSync(p, JSON.stringify(m, null, 2) + '\n');
+          "
+          mkdir -p dist-extension
+          (cd extension && zip -r "../dist-extension/llm-wiki-extension-${APP_VERSION}.zip" . -x "*.DS_Store")
+          ls -la dist-extension
+
       - name: Generate changelog and create release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -210,13 +228,13 @@ jobs:
           cat "$NOTES_FILE"
           echo "---"
 
-          # 3) Create the release. gh release create accepts one or more files
-          #    as positional args; we enumerate the bundle files via a
-          #    space-safe find/read loop.
+          # 3) Create the release. Attach Tauri bundles AND the browser
+          #    extension zip all at once. The release becomes immutable after
+          #    gh release create returns, so everything must be passed here.
           ASSETS=()
           while IFS= read -r f; do
             ASSETS+=("$f")
-          done < <(find bundles -type f | sort)
+          done < <(find bundles dist-extension -type f | sort)
 
           gh release create "$TAG" \
             --title "LLM Wiki ${TAG}" \
@@ -226,36 +244,3 @@ jobs:
           echo ""
           echo "✅ Release ${TAG} created at:"
           echo "   https://github.com/yangcalmking/llm_wiki/releases/tag/${TAG}"
-
-  # ─── Phase 3: Package browser extension ────────────────────────────────
-  package-extension:
-    name: Package browser extension
-    needs: release
-    if: github.event_name == 'push'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Sync extension manifest version and zip
-        run: |
-          # Pull version from package.json so we have a single source of
-          # truth. Chrome's manifest requires numeric-only version
-          # (e.g. 0.3.5), which matches the repo's semver convention.
-          APP_VERSION=$(node -p "require('./package.json').version")
-          node -e "
-            const fs = require('fs');
-            const p = 'extension/manifest.json';
-            const m = JSON.parse(fs.readFileSync(p, 'utf-8'));
-            m.version = '${APP_VERSION}';
-            fs.writeFileSync(p, JSON.stringify(m, null, 2) + '\n');
-          "
-          mkdir -p dist-extension
-          (cd extension && zip -r "../dist-extension/llm-wiki-extension-${APP_VERSION}.zip" . -x "*.DS_Store")
-          ls -la dist-extension
-
-      - name: Attach extension zip to release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release upload "${{ github.ref_name }}" dist-extension/*.zip --clobber

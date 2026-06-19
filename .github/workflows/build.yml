@@ -81,6 +81,27 @@ jobs:
       - name: Install frontend dependencies
         run: npm install
 
+      # ── Cargo networking hardening ───────────────────────────────
+      # crates.io sometimes hiccups under CI, and the QEMU-backed
+      # ARM runner is especially sensitive to flaky HTTP/2 sessions
+      # ("curl error 16: Error in the HTTP2 framing layer").  We
+      # switch to the sparse index protocol (faster + smaller
+      # fetches) and force HTTP/1.1 to avoid HTTP/2 framing errors,
+      # while also bumping the retry budget.
+      - name: Harden Cargo networking for CI
+        run: |
+          mkdir -p ~/.cargo
+          cat >> ~/.cargo/config.toml <<'EOF'
+          [registries.crates-io]
+          protocol = "sparse"
+
+          [http]
+          # Prefer HTTP/1.1 to sidestep HTTP/2 framing instability
+          # (curl CURLE_HTTP2 / error 16) on slow/virtualized runners.
+          multiplexing = false
+          http-version = "http1.1"
+          EOF
+
       # Build without tauri-action's release machinery.
       # We only use `tauri build` to produce the bundles;
       # release creation is handled by the `release` job below.
@@ -92,6 +113,12 @@ jobs:
           # for the macOS build to succeed without a certificate.
           TAURI_SIGNING_PRIVATE_KEY: ''
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
+          # Cargo-level retries + networking guardrails.  HTTP/1.1 is
+          # enforced via ~/.cargo/config.toml above; these env vars
+          # provide an extra belt-and-braces layer.
+          CARGO_NET_RETRY: 5
+          CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+          CARGO_HTTP_MULTIPLEXING: 'false'
 
       # Upload bundles as artifacts so the `release` job can fetch them.
       - name: Upload bundle

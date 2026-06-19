@@ -4,8 +4,11 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import {
   CallToolRequestSchema,
   ErrorCode,
+  ListResourceTemplatesRequestSchema,
+  ListResourcesRequestSchema,
   ListToolsRequestSchema,
   McpError,
+  ReadResourceRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js"
 import {
   LlmWikiApiClient,
@@ -24,7 +27,7 @@ const client = new LlmWikiApiClient()
 
 const server = new Server(
   { name: "llm-wiki", version: VERSION },
-  { capabilities: { tools: {} } },
+  { capabilities: { tools: {}, resources: {} } },
 )
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -131,6 +134,213 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
   ],
 }))
 
+// === resources handlers ===
+// URI scheme: llm-wiki://<path>
+//   llm-wiki://status
+//   llm-wiki://projects/<projectId>/files[?root=wiki|sources|all]
+//   llm-wiki://projects/<projectId>/files/<relativePath>
+//   llm-wiki://projects/<projectId>/reviews[?status=unresolved|resolved|all&limit=N]
+//   llm-wiki://projects/<projectId>/graph[?limit=N&nodeType=...]
+//   llm-wiki://projects/<projectId>/search?q=<query>[&top_k=N]
+server.setRequestHandler(ListResourcesRequestSchema, async () => {
+  const health = await client.health().catch(() => null)
+  const projectsResp = await client.projects().catch(() => ({ projects: [] as Array<{ id: string; name: string; path: string; current: boolean }>, currentProject: null as { id: string; name: string; path: string; current: boolean } | null }))
+  const current = projectsResp.currentProject?.id ?? DEFAULT_PROJECT_ID
+  const base: Array<{ uri: string; name: string; description?: string; mimeType?: string }> = [
+    { uri: "llm-wiki://status", name: "LLM Wiki server status", mimeType: "application/json" },
+  ]
+  for (const project of projectsResp.projects ?? []) {
+    const pid = encodeURIComponent(project.id)
+    base.push({ uri: `llm-wiki://projects/${pid}/files`, name: `Files for ${project.name}`, mimeType: "text/markdown" })
+    base.push({ uri: `llm-wiki://projects/${pid}/files/wiki/index.md`, name: `Wiki index for ${project.name}`, mimeType: "text/markdown" })
+    base.push({ uri: `llm-wiki://projects/${pid}/reviews`, name: `Review items for ${project.name}`, mimeType: "text/markdown" })
+    base.push({ uri: `llm-wiki://projects/${pid}/graph`, name: `Knowledge graph for ${project.name}`, mimeType: "text/markdown" })
+  }
+  if (current !== "current") {
+    // also list 'current' convenience URIs
+    base.push({ uri: `llm-wiki://projects/current/files`, name: "Files for the current project", mimeType: "text/markdown" })
+    base.push({ uri: `llm-wiki://projects/current/files/wiki/index.md`, name: "Wiki index for the current project", mimeType: "text/markdown" })
+    base.push({ uri: `llm-wiki://projects/current/reviews`, name: "Review items for the current project", mimeType: "text/markdown" })
+    base.push({ uri: `llm-wiki://projects/current/graph`, name: "Knowledge graph for the current project", mimeType: "text/markdown" })
+  }
+  // silence unused warning when health is not reachable
+  void health
+  return { resources: base as any[] }
+})
+
+server.setRequestHandler(ListResourceTemplatesRequestSchema, async () => ({
+  resourceTemplates: [
+    {
+      uriTemplate: "llm-wiki://projects/{projectId}/files/{path*}",
+      name: "Read a project file",
+      description: "Read a text file from a LLM Wiki project. path* is the project-relative path (e.g. wiki/index.md).",
+      mimeType: "text/markdown",
+    },
+    {
+      uriTemplate: "llm-wiki://projects/{projectId}/files",
+      name: "List project files",
+      description: "List files for a LLM Wiki project. Query parameters: root=wiki|sources|all, recursive=true|false, max_files=N.",
+      mimeType: "text/markdown",
+    },
+    {
+      uriTemplate: "llm-wiki://projects/{projectId}/reviews",
+      name: "Review items",
+      description: "Review tab items for a project. Query parameters: status=unresolved|resolved|all, limit=N, type=missing-page etc.",
+      mimeType: "text/markdown",
+    },
+    {
+      uriTemplate: "llm-wiki://projects/{projectId}/graph",
+      name: "Knowledge graph",
+      description: "Knowledge graph for a project. Query parameters: q=text, nodeType=type, limit=N.",
+      mimeType: "text/markdown",
+    },
+    {
+      uriTemplate: "llm-wiki://projects/{projectId}/search?q={query}",
+      name: "Search a project",
+      description: "Full-text/vector search within a project. Optional query parameters: top_k=N, include_content=true|false.",
+      mimeType: "text/markdown",
+    },
+  ],
+}))
+
+server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+  const raw = typeof request.params.uri === "string" ? request.params.uri : ""
+  const uri = parseLlmWikiUri(raw)
+  if (!uri) {
+    throw new McpError(ErrorCode.InvalidParams, `Unsupported URI: ${raw}. Use llm-wiki:// scheme.`)
+  }
+  try {
+    if (uri.kind === "status") {
+      const [health, projects] = await Promise.all([
+        client.health(),
+        client.projects().catch(() => ({ projects: [], currentProject: null })),
+      ])
+      return jsonContentResult({ ...health, ...projects })
+    }
+    await assertMcpEnabled()
+    if (uri.kind === "file") {
+      const { path, content } = await client.fileContent(uri.projectId, uri.filePath)
+      return markdownContentResult(`# ${path}\n\n${truncateText(content, MAX_TEXT_BYTES)}`, `llm-wiki://projects/${encodeURIComponent(uri.projectId)}/files/${uri.filePath}`)
+    }
+    if (uri.kind === "files") {
+      const response = await client.files(uri.projectId, {
+        root: enumArg(uri.params.root, ["wiki", "sources", "all"] as const, "wiki"),
+        recursive: boolArg(parseBoolean(uri.params.recursive), true),
+        maxFiles: numberArg(parseNumber(uri.params.max_files)),
+      })
+      return markdownContentResult(formatFileTree(response.files, response.truncated))
+    }
+    if (uri.kind === "reviews") {
+      const reviews = await client.reviews(uri.projectId, {
+        status: enumArg(uri.params.status, ["unresolved", "resolved", "all"] as const, "unresolved"),
+        type: optionalStringArg(uri.params.type),
+        limit: numberArg(parseNumber(uri.params.limit)),
+      })
+      return markdownContentResult(formatReviews(reviews))
+    }
+    if (uri.kind === "graph") {
+      const graph = await client.graph(uri.projectId, {
+        q: optionalStringArg(uri.params.q),
+        nodeType: optionalStringArg(uri.params.node_type),
+        limit: numberArg(parseNumber(uri.params.limit)),
+      })
+      return markdownContentResult(formatGraph(graph.nodes, graph.edges))
+    }
+    if (uri.kind === "search") {
+      const query = stringArg(uri.params.q, "q")
+      const search = await client.search(uri.projectId, query, {
+        topK: numberArg(parseNumber(uri.params.top_k)),
+        includeContent: boolArg(parseBoolean(uri.params.include_content), false),
+      })
+      return markdownContentResult(formatSearchResults(query, search))
+    }
+    throw new McpError(ErrorCode.InvalidParams, `Unsupported resource: ${raw}`)
+  } catch (err) {
+    if (err instanceof McpError) throw err
+    throw new McpError(
+      ErrorCode.InternalError,
+      err instanceof Error ? err.message : String(err),
+    )
+  }
+})
+
+function jsonContentResult(obj: unknown): { contents: Array<{ type: string; mimeType: string; text: string }> } {
+  return {
+    contents: [{ type: "text", mimeType: "application/json", text: JSON.stringify(obj, null, 2) }],
+  }
+}
+
+function markdownContentResult(text: string, _uri?: string): { contents: Array<{ type: string; mimeType: string; text: string; uri?: string }> } {
+  return {
+    contents: [{ type: "text", mimeType: "text/markdown", text, uri: _uri }],
+  }
+}
+
+type ResourceUri =
+  | { kind: "status" }
+  | { kind: "files"; projectId: string; params: Record<string, string> }
+  | { kind: "file"; projectId: string; filePath: string; params: Record<string, string> }
+  | { kind: "reviews"; projectId: string; params: Record<string, string> }
+  | { kind: "graph"; projectId: string; params: Record<string, string> }
+  | { kind: "search"; projectId: string; params: Record<string, string> }
+
+function parseLlmWikiUri(raw: string): ResourceUri | null {
+  if (!raw || typeof raw !== "string") return null
+  const match = /^llm-wiki:\/\/(.+)$/.exec(raw)
+  if (!match) return null
+  // split path and query
+  const question = match[1].indexOf("?")
+  let pathPart: string
+  let queryPart: string
+  if (question === -1) {
+    pathPart = match[1]
+    queryPart = ""
+  } else {
+    pathPart = match[1].slice(0, question)
+    queryPart = match[1].slice(question + 1)
+  }
+  const params: Record<string, string> = {}
+  for (const pair of queryPart.split("&")) {
+    if (!pair) continue
+    const eq = pair.indexOf("=")
+    const key = decodeURIComponent(eq === -1 ? pair : pair.slice(0, eq))
+    const value = decodeURIComponent(eq === -1 ? "" : pair.slice(eq + 1))
+    if (key) params[key] = value
+  }
+  const segments = pathPart.split("/").map((s) => decodeURIComponent(s))
+  if (segments.length === 1 && segments[0] === "status") return { kind: "status" }
+  if (segments.length >= 2 && segments[0] === "projects") {
+    const projectId = segments[1] || DEFAULT_PROJECT_ID
+    if (segments.length === 2) return null
+    const rest = segments.slice(2)
+    if (rest[0] === "files") {
+      if (rest.length === 1) return { kind: "files", projectId, params }
+      return { kind: "file", projectId, filePath: rest.slice(1).join("/"), params }
+    }
+    if (rest[0] === "reviews" && rest.length === 1) return { kind: "reviews", projectId, params }
+    if (rest[0] === "graph" && rest.length === 1) return { kind: "graph", projectId, params }
+    if (rest[0] === "search" && rest.length === 1) return { kind: "search", projectId, params }
+  }
+  return null
+}
+
+function parseBoolean(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") return value
+  if (typeof value !== "string") return undefined
+  const v = value.trim().toLowerCase()
+  if (v === "true" || v === "1") return true
+  if (v === "false" || v === "0" || v === "") return false
+  return undefined
+}
+
+function parseNumber(value: unknown): number | undefined {
+  if (typeof value === "number") return value
+  if (typeof value !== "string") return undefined
+  const n = Number(value)
+  return Number.isFinite(n) ? n : undefined
+}
+
+// === tools handlers ===
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const args = asObject(request.params.arguments ?? {})
   try {
@@ -172,7 +382,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
       case "llm_wiki_search": {
         await assertMcpEnabled()
-        const query = stringArg(args.query, "query")
+        const rawQuery = pickStringArg(args, ["query", "q"])
+        const query = stringArg(rawQuery, "query (or q)")
         const search = await client.search(projectId(args), query, {
           topK: numberArg(args.top_k),
           includeContent: boolArg(args.include_content, false),
@@ -233,7 +444,17 @@ function stringArg(value: unknown, name: string): string {
   if (typeof value !== "string" || value.trim() === "") {
     throw new McpError(ErrorCode.InvalidParams, `${name} is required`)
   }
-  return value
+  return value.trim()
+}
+
+function pickStringArg(args: Record<string, unknown>, names: string[]): unknown {
+  for (const name of names) {
+    if (typeof args[name] === "string") return args[name]
+  }
+  for (const name of names) {
+    if (args[name] !== undefined) return args[name]
+  }
+  return undefined
 }
 
 function optionalStringArg(value: unknown): string | undefined {

@@ -408,7 +408,8 @@
         "searxngCategoriesHint": "Categories are sent as the SearXNG `categories` parameter.",
         "searchEngine": "Search engine / category",
         "customSerpApiPlaceholder": "Custom SerpApi engine, e.g. google_finance",
-        "customSerpApiHint": "Custom engine will be sent as the SerpApi `engine` parameter."
+        "customSerpApiHint": "Custom engine will be sent as the SerpApi `engine` parameter.",
+        "customEndpointHint": "Sends a POST request with body { model, query, search_type, max_results }; response must be { results: [{ title, url, snippet }] }."
       },
       "network": {
         "title": "Network",

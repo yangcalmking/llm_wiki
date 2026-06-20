@@ -13,7 +13,7 @@
  * fallback doesn't regress silently (you'd only notice via a vitest
  * run crash with "window is not defined").
  */
-import { describe, it, expect } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { getHttpFetch, isFetchNetworkError } from "./tauri-fetch"
 
 describe("getHttpFetch — Node fallback", () => {
@@ -42,10 +42,42 @@ describe("getHttpFetch — Node fallback", () => {
     }
   })
 
-  it("is cached: two calls return the same function reference", async () => {
-    const a = await getHttpFetch()
-    const b = await getHttpFetch()
-    expect(a).toBe(b)
+  it("dispatches through globalThis.fetch so vitest stubs take effect immediately", async () => {
+    const stub = vi.fn<typeof globalThis.fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    )
+    // 1. Prime getHttpFetch() BEFORE stubbing — the old cached-bind
+    //    implementation would keep the original fetch reference here.
+    await getHttpFetch()
+    // 2. Replace fetch AFTER the first getHttpFetch() call.
+    vi.stubGlobal("fetch", stub)
+    // 3. Now getHttpFetch() must route through the stub, not a stale
+    //    reference.
+    const fn = await getHttpFetch()
+    await fn("http://example.invalid/test", { method: "POST", body: "payload" })
+    expect(stub).toHaveBeenCalledTimes(1)
+    const [url, init] = stub.mock.calls[0] ?? []
+    expect(String(url)).toBe("http://example.invalid/test")
+    expect((init as { method?: string } | undefined)?.method).toBe("POST")
+  })
+
+  it("reflects subsequent fetch re-stubs without clearing state", async () => {
+    const first = vi.fn<typeof globalThis.fetch>().mockResolvedValue(
+      new Response("first", { status: 200 }),
+    )
+    const second = vi.fn<typeof globalThis.fetch>().mockResolvedValue(
+      new Response("second", { status: 200 }),
+    )
+    vi.stubGlobal("fetch", first)
+    const fn1 = await getHttpFetch()
+    await fn1("http://one/", { method: "GET" })
+    expect(first).toHaveBeenCalledTimes(1)
+
+    vi.stubGlobal("fetch", second)
+    const fn2 = await getHttpFetch()
+    await fn2("http://two/", { method: "GET" })
+    expect(second).toHaveBeenCalledTimes(1)
+    expect(first).toHaveBeenCalledTimes(1) // unchanged
   })
 })
 

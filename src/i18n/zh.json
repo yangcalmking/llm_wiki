@@ -408,7 +408,8 @@
         "searxngCategoriesHint": "分类会作为 SearXNG 的 `categories` 参数发送。",
         "searchEngine": "搜索引擎 / 分类",
         "customSerpApiPlaceholder": "自定义 SerpApi engine，例如 google_finance",
-        "customSerpApiHint": "自定义 engine 会作为 SerpApi 的 `engine` 参数发送。"
+        "customSerpApiHint": "自定义 engine 会作为 SerpApi 的 `engine` 参数发送。",
+        "customEndpointHint": "发送 POST 请求到此地址，请求体为 { model, query, search_type, max_results }，响应需为 { results: [{ title, url, snippet }] }。"
       },
       "network": {
         "title": "网络",

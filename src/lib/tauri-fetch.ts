@@ -36,18 +36,27 @@ const isNodeEnv = typeof window === "undefined"
  *   const httpFetch = await getHttpFetch()
  *   const response = await httpFetch(url, opts)
  *
- * The promise is cached, so repeated calls don't re-import the plugin.
+ * The promise is cached in the Tauri webview path, so repeated calls
+ * don't re-import the plugin. In Node environments the fetch function
+ * is intentionally NOT cached — test frameworks (vitest, Jest)
+ * routinely replace `globalThis.fetch` via stubs/spies between test
+ * cases, and a cached binding would silently route around the mock,
+ * causing tests to make real network requests.
  */
 export function getHttpFetch(): Promise<typeof globalThis.fetch> {
+  if (isNodeEnv) {
+    // Return a fresh closure on every call so vi.stubGlobal("fetch", ...)
+    // and similar stubs always take effect immediately. The closure
+    // dispatches through whatever `globalThis.fetch` currently points to,
+    // so tests can replace the underlying fetch between iterations.
+    return Promise.resolve(
+      (...args: Parameters<typeof globalThis.fetch>) => globalThis.fetch(...args),
+    )
+  }
   if (!pluginFetchPromise) {
-    if (isNodeEnv) {
-      // Bind so `this === globalThis` — Node's fetch requires it.
-      pluginFetchPromise = Promise.resolve(globalThis.fetch.bind(globalThis))
-    } else {
-      pluginFetchPromise = import("@tauri-apps/plugin-http")
-        .then((m) => m.fetch as unknown as typeof globalThis.fetch)
-        .catch(() => globalThis.fetch.bind(globalThis))
-    }
+    pluginFetchPromise = import("@tauri-apps/plugin-http")
+      .then((m) => m.fetch as unknown as typeof globalThis.fetch)
+      .catch(() => globalThis.fetch.bind(globalThis))
   }
   return pluginFetchPromise
 }

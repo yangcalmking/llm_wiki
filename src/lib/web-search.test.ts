@@ -290,4 +290,155 @@ describe("webSearch", () => {
       5,
     )).rejects.toThrow("Check your Ollama API key")
   })
+
+  it("calls a custom POST endpoint with Bearer auth and the configured model + search_type", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({
+      results: [
+        { title: "Custom hit", url: "https://custom.example/page", snippet: "Fresh content" },
+        { title: "Second", url: "https://custom.example/two", snippet: "Second snippet" },
+      ],
+    }))
+
+    const out = await webSearch(
+      "query for custom",
+      {
+        provider: "custom",
+        apiKey: "",
+        customEndpoint: "http://localhost:20128/v1/search",
+        customModel: "tavily",
+        customSearchType: "web",
+        providerConfigs: {
+          custom: { apiKey: "sk-custom-token" },
+        },
+      },
+      5,
+    )
+    const [url, init] = fetchMock.mock.calls[0]
+
+    expect(url).toBe("http://localhost:20128/v1/search")
+    expect(init).toEqual(expect.objectContaining({ method: "POST" }))
+    const headers = (init?.headers as Record<string, string>) ?? {}
+    expect(headers["Content-Type"]).toBe("application/json")
+    expect(headers["Authorization"]).toBe("Bearer sk-custom-token")
+    const body = JSON.parse(String(init?.body))
+    expect(body).toEqual({
+      model: "tavily",
+      query: "query for custom",
+      search_type: "web",
+      max_results: 5,
+    })
+    expect(out).toEqual([
+      { title: "Custom hit", url: "https://custom.example/page", snippet: "Fresh content", source: "custom.example" },
+      { title: "Second", url: "https://custom.example/two", snippet: "Second snippet", source: "custom.example" },
+    ])
+    expect(hasConfiguredSearchProvider({
+      provider: "custom",
+      apiKey: "",
+      providerConfigs: {
+        custom: {
+          customEndpoint: "http://localhost:20128/v1/search",
+          customModel: "tavily",
+          customSearchType: "web",
+          apiKey: "sk-custom-token",
+        },
+      },
+    })).toBe(true)
+  })
+
+  it("treats a custom provider with only an endpoint (no API key) as configured", () => {
+    expect(hasConfiguredSearchProvider({
+      provider: "custom",
+      apiKey: "",
+      providerConfigs: {
+        custom: { customEndpoint: "http://localhost:20128/v1/search" },
+      },
+    })).toBe(true)
+    expect(hasConfiguredSearchProvider({
+      provider: "custom",
+      apiKey: "",
+      customEndpoint: "",
+    })).toBe(false)
+  })
+
+  it("calls a custom endpoint without Bearer auth when no token is provided", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ results: [] }))
+
+    await webSearch(
+      "unauth",
+      {
+        provider: "custom",
+        apiKey: "",
+        providerConfigs: {
+          custom: { customEndpoint: "https://search.local/query" },
+        },
+      },
+      3,
+    )
+    const init = fetchMock.mock.calls[0][1] as { headers?: Record<string, string> } | undefined
+    const headers = init?.headers ?? {}
+
+    expect(headers["Authorization"]).toBeUndefined()
+    expect(headers["Content-Type"]).toBe("application/json")
+    const body = JSON.parse(String((init as { body?: string })?.body ?? ""))
+    expect(body.query).toBe("unauth")
+    expect(body.max_results).toBe(3)
+  })
+
+  it("requires a custom endpoint to run a web search", async () => {
+    await expect(webSearch("x", { provider: "custom", apiKey: "", customEndpoint: "" }, 5))
+      .rejects.toThrow("custom search endpoint")
+  })
+
+  it("surfaces non-2xx responses from the custom endpoint with the status code", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({}, { status: 500 }))
+
+    await expect(webSearch(
+      "failure",
+      {
+        provider: "custom",
+        apiKey: "",
+        providerConfigs: {
+          custom: { customEndpoint: "http://localhost:20128/v1/search" },
+        },
+      },
+      5,
+    )).rejects.toThrow(/Custom search failed \(500\)/)
+  })
+
+  it("resolves custom endpoint values from providerConfigs and defaults model/search_type", () => {
+    const resolved = resolveSearchConfig({
+      provider: "custom",
+      apiKey: "",
+      customEndpoint: "http://localhost:20128/v1/search",
+      customModel: "tavily",
+      customSearchType: "web",
+    })
+
+    expect(resolved.customEndpoint).toBe("http://localhost:20128/v1/search")
+    expect(resolved.customModel).toBe("tavily")
+    expect(resolved.customSearchType).toBe("web")
+  })
+
+  it("uses the providerConfigs override for the custom endpoint over the top-level value", () => {
+    const resolved = resolveSearchConfig({
+      provider: "custom",
+      apiKey: "top-level-key",
+      customEndpoint: "http://127.0.0.1:9999/wrong",
+      customModel: "wrong",
+      customSearchType: "wrong",
+      providerConfigs: {
+        custom: {
+          apiKey: "override-key",
+          customEndpoint: "http://localhost:20128/v1/search",
+          customModel: "tavily",
+          customSearchType: "web",
+        },
+      },
+    })
+
+    expect(resolved.customEndpoint).toBe("http://localhost:20128/v1/search")
+    expect(resolved.customModel).toBe("tavily")
+    expect(resolved.customSearchType).toBe("web")
+    expect(resolved.apiKey).toBe("override-key")
+  })
 })

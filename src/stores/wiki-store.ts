@@ -38,7 +38,7 @@ interface LlmConfig {
   codexCliTimeoutMinutes?: number
 }
 
-export type SearchProvider = "tavily" | "serpapi" | "searxng" | "ollama" | "none"
+export type SearchProvider = "tavily" | "serpapi" | "searxng" | "ollama" | "custom" | "none"
 export type DeepResearchSource = "web" | "anytxt" | "both"
 export type SerpApiEngine =
   | "google"
@@ -70,6 +70,9 @@ export interface SearchProviderOverride {
   searXngUrl?: string
   searXngCategories?: SearXngCategory[]
   ollamaUrl?: string
+  customEndpoint?: string
+  customModel?: string
+  customSearchType?: string
 }
 
 export type SearchProviderConfigs = Partial<Record<Exclude<SearchProvider, "none">, SearchProviderOverride>>
@@ -89,6 +92,9 @@ interface SearchApiConfig {
   searXngUrl?: string
   searXngCategories?: SearXngCategory[]
   ollamaUrl?: string
+  customEndpoint?: string
+  customModel?: string
+  customSearchType?: string
   providerConfigs?: SearchProviderConfigs
   deepResearchSource?: DeepResearchSource
   anyTxt?: AnyTxtConfig
@@ -401,6 +407,9 @@ export const useWikiStore = create<WikiState>((set) => ({
     serpApiEngine: "google",
     searXngUrl: "",
     searXngCategories: ["general"],
+    customEndpoint: "",
+    customModel: "tavily",
+    customSearchType: "web",
     providerConfigs: {},
     deepResearchSource: "web",
     anyTxt: {

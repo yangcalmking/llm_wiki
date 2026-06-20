@@ -47,6 +47,14 @@ const SEARCH_PROVIDERS = [
     urlPlaceholder: "https://search.example.com",
     needsApiKey: false,
   },
+  {
+    id: "custom",
+    label: "Custom",
+    hint: "Custom POST JSON endpoint with { model, query, search_type, max_results } body and a { results: [{ title, url, snippet }] } response",
+    urlPlaceholder: "http://localhost:20128/v1/search",
+    keyPlaceholder: "Optional Bearer token (leave empty for unauthenticated endpoints)",
+    needsApiKey: false,
+  },
 ] as const
 
 export function WebSearchSection() {
@@ -231,9 +239,12 @@ export function WebSearchSection() {
         {SEARCH_PROVIDERS.map((provider) => {
           const override = resolvedConfig.providerConfigs?.[provider.id]
           const isActive = resolvedConfig.provider === provider.id
-          const hasConfig = provider.id === "searxng"
-            ? !!override?.searXngUrl
-            : !!override?.apiKey
+          const hasConfig =
+            provider.id === "searxng"
+              ? !!override?.searXngUrl
+              : provider.id === "custom"
+                ? !!override?.customEndpoint
+                : !!override?.apiKey
           const isExpanded = !!expanded[provider.id]
           return (
             <div
@@ -300,7 +311,68 @@ export function WebSearchSection() {
 
               {isExpanded && (
                 <div className="space-y-4 border-t bg-background/50 px-4 py-3">
-                  {provider.needsApiKey ? (
+                  {provider.id === "custom" ? (
+                    <>
+                      <div className="space-y-2">
+                        <Label>{t("settings.sections.webSearch.instanceUrl")}</Label>
+                        <Input
+                          value={override?.customEndpoint ?? resolvedConfig.customEndpoint ?? ""}
+                          onChange={(e) =>
+                            updateProvider("custom", {
+                              ...(override ?? {}),
+                              customEndpoint: e.target.value,
+                            })
+                          }
+                          placeholder={provider.urlPlaceholder}
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          {t("settings.sections.webSearch.customEndpointHint")}
+                        </p>
+                      </div>
+                      <div className="grid gap-3 md:grid-cols-2">
+                        <div className="space-y-2">
+                          <Label>Model</Label>
+                          <Input
+                            value={override?.customModel ?? resolvedConfig.customModel ?? "tavily"}
+                            onChange={(e) =>
+                              updateProvider("custom", {
+                                ...(override ?? {}),
+                                customModel: e.target.value,
+                              })
+                            }
+                            placeholder="tavily"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label>Search type</Label>
+                          <Input
+                            value={override?.customSearchType ?? resolvedConfig.customSearchType ?? "web"}
+                            onChange={(e) =>
+                              updateProvider("custom", {
+                                ...(override ?? {}),
+                                customSearchType: e.target.value,
+                              })
+                            }
+                            placeholder="web"
+                          />
+                        </div>
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Bearer token (optional)</Label>
+                        <Input
+                          type="password"
+                          value={override?.apiKey ?? ""}
+                          onChange={(e) =>
+                            updateProvider("custom", {
+                              ...(override ?? {}),
+                              apiKey: e.target.value,
+                            })
+                          }
+                          placeholder={provider.keyPlaceholder}
+                        />
+                      </div>
+                    </>
+                  ) : provider.needsApiKey ? (
                     <div className="space-y-2">
                       <Label>{t("settings.apiKey")}</Label>
                       <Input

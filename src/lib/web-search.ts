@@ -49,6 +49,9 @@ export function resolveSearchConfig(config: SearchApiConfig): SearchApiConfig {
             serpApiEngine: config.serpApiEngine,
             searXngUrl: config.searXngUrl,
             searXngCategories: config.searXngCategories,
+            customEndpoint: config.customEndpoint,
+            customModel: config.customModel,
+            customSearchType: config.customSearchType,
           },
         }
       : {}),
@@ -64,6 +67,16 @@ export function resolveSearchConfig(config: SearchApiConfig): SearchApiConfig {
       ? {
           ollama: {
             ollamaUrl: config.ollamaUrl,
+          },
+        }
+      : {}),
+    ...(config.provider === "custom" && config.customEndpoint
+      ? {
+          custom: {
+            apiKey: config.apiKey,
+            customEndpoint: config.customEndpoint,
+            customModel: config.customModel,
+            customSearchType: config.customSearchType,
           },
         }
       : {}),
@@ -84,6 +97,9 @@ export function resolveSearchConfig(config: SearchApiConfig): SearchApiConfig {
       serpApiEngine: config.serpApiEngine ?? providerConfigs.serpapi?.serpApiEngine ?? "google",
       searXngUrl: config.searXngUrl ?? providerConfigs.searxng?.searXngUrl ?? "",
       searXngCategories: config.searXngCategories ?? providerConfigs.searxng?.searXngCategories ?? ["general"],
+      customEndpoint: config.customEndpoint ?? providerConfigs.custom?.customEndpoint ?? "",
+      customModel: config.customModel ?? providerConfigs.custom?.customModel ?? "tavily",
+      customSearchType: config.customSearchType ?? providerConfigs.custom?.customSearchType ?? "web",
       ollamaUrl: providerConfigs.ollama?.ollamaUrl ?? "https://ollama.com",
       providerConfigs,
       deepResearchSource: config.deepResearchSource ?? "web",
@@ -98,6 +114,9 @@ export function resolveSearchConfig(config: SearchApiConfig): SearchApiConfig {
     serpApiEngine: activeOverride?.serpApiEngine ?? config.serpApiEngine ?? "google",
     searXngUrl: activeOverride?.searXngUrl ?? config.searXngUrl ?? "",
     searXngCategories: activeOverride?.searXngCategories ?? config.searXngCategories ?? ["general"],
+    customEndpoint: activeOverride?.customEndpoint ?? config.customEndpoint ?? "",
+    customModel: activeOverride?.customModel ?? config.customModel ?? "tavily",
+    customSearchType: activeOverride?.customSearchType ?? config.customSearchType ?? "web",
     ollamaUrl: resolvedOllamaUrl,
     providerConfigs,
     deepResearchSource: config.deepResearchSource ?? "web",
@@ -110,6 +129,9 @@ export function hasConfiguredSearchProvider(config: SearchApiConfig): boolean {
   if (resolved.provider === "none") return false
   if (resolved.provider === "searxng") {
     return Boolean(resolved.searXngUrl?.trim())
+  }
+  if (resolved.provider === "custom") {
+    return Boolean(resolved.customEndpoint?.trim())
   }
   if (resolved.provider === "ollama") {
     return Boolean(resolved.apiKey?.trim())
@@ -143,6 +165,9 @@ export async function webSearch(
   if (resolved.provider === "searxng" && !resolved.searXngUrl?.trim()) {
     throw new Error("Web search not configured. Add a SearXNG instance URL in Settings.")
   }
+  if (resolved.provider === "custom" && !resolved.customEndpoint?.trim()) {
+    throw new Error("Web search not configured. Add a custom search endpoint URL in Settings.")
+  }
   if (resolved.provider === "ollama" && !resolved.apiKey?.trim()) {
     throw new Error("Ollama Web Search API requires an Ollama API key. Add one in Settings.")
   }
@@ -156,6 +181,15 @@ export async function webSearch(
       return searXngSearch(query, resolved.searXngUrl ?? "", maxResults, resolved.searXngCategories ?? ["general"])
     case "ollama":
       return ollamaSearch(query, resolved.apiKey ?? "", maxResults)
+    case "custom":
+      return customSearch(
+        query,
+        resolved.customEndpoint ?? "",
+        resolved.apiKey,
+        resolved.customModel ?? "tavily",
+        resolved.customSearchType ?? "web",
+        maxResults,
+      )
     default:
       throw new Error(`Unknown search provider: ${resolved.provider}`)
   }
@@ -449,6 +483,84 @@ async function ollamaSearch(
         title: r.title ?? "Untitled",
         url,
         snippet: r.content ?? "",
+        source: hostnameFromUrl(url),
+      }
+    })
+}
+
+interface CustomSearchResponse {
+  results?: Array<{
+    title?: string
+    url?: string
+    snippet?: string
+  }>
+}
+
+function normalizeCustomEndpoint(endpoint: string): string {
+  const trimmed = endpoint.trim()
+  return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`
+}
+
+async function customSearch(
+  query: string,
+  endpoint: string,
+  apiKey: string | undefined,
+  model: string,
+  searchType: string,
+  maxResults: number,
+): Promise<WebSearchResult[]> {
+  const normalizedEndpoint = normalizeCustomEndpoint(endpoint)
+  if (!normalizedEndpoint || !/^https?:\/\//i.test(normalizedEndpoint)) {
+    throw new Error("Web search not configured. Add a custom search endpoint URL in Settings.")
+  }
+
+  const trimmedKey = (apiKey ?? "").trim()
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  }
+  if (trimmedKey.length > 0) {
+    headers["Authorization"] = `Bearer ${trimmedKey}`
+  }
+
+  const body: Record<string, unknown> = {
+    model,
+    query,
+    search_type: searchType,
+    max_results: maxResults,
+  }
+
+  const httpFetch = await getHttpFetch()
+  let response: Response
+  try {
+    response = await httpFetch(normalizedEndpoint, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+    })
+  } catch (err) {
+    if (isFetchNetworkError(err)) {
+      throw new Error(
+        "Network error reaching the custom search endpoint. Check the instance URL and your connectivity.",
+      )
+    }
+    throw err
+  }
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => "Unknown error")
+    throw new Error(`Custom search failed (${response.status}): ${errorText}`)
+  }
+
+  const data = (await response.json()) as CustomSearchResponse
+
+  return (data.results ?? [])
+    .slice(0, maxResults)
+    .map((r) => {
+      const url = r.url ?? ""
+      return {
+        title: r.title ?? "Untitled",
+        url,
+        snippet: r.snippet ?? "",
         source: hostnameFromUrl(url),
       }
     })

@@ -82,7 +82,10 @@ jobs:
         run: npm install
 
       - name: Build MCP server
-        run: npm run mcp:build
+        run: |
+          npm --prefix mcp-server install
+          npm run mcp:build
+          ls -la mcp-server/dist/src/
 
       # ── Cargo networking hardening ───────────────────────────────
       # crates.io sometimes hiccups under CI, and the QEMU-backed

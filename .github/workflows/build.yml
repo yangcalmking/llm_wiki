@@ -243,13 +243,15 @@ jobs:
             ASSETS+=("$f")
           done < <(find bundles dist-extension -type f | sort)
 
-          # --clobber: replace existing release/tag if present (idempotent
-          #          re-runs). Without this flag, `gh release create` errors out
-          #          when GitHub has already auto-generated a release entry for
-          #          the tag, which happens when tag push creates a release page
-          #          before the build job finishes.
+          # If a release already exists for this tag (GitHub may
+          # auto-create one on tag push), delete it first so
+          # `gh release create` succeeds.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists, deleting it first..."
+            gh release delete "$TAG" --yes
+          fi
+
           gh release create "$TAG" \
-            --clobber \
             --title "LLM Wiki ${TAG}" \
             --notes-file "$NOTES_FILE" \
             "${ASSETS[@]}"
